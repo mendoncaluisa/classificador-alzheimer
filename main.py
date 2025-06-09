@@ -1,124 +1,108 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
+
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
-from sklearn.neural_network import MLPClassifier
+
 from sklearn.naive_bayes import GaussianNB
+from sklearn.neural_network import MLPClassifier
 from sklearn.tree import DecisionTreeClassifier
-from sklearn.metrics import (accuracy_score, confusion_matrix,
-                             classification_report, roc_curve, auc,
-                             RocCurveDisplay)
-from sklearn.preprocessing import label_binarize
-from itertools import cycle
-from sklearn.multiclass import OneVsRestClassifier
 
-data = pd.read_csv("alzheimers_disease_data.csv")
-# Vou assumir que a última coluna é o target e as outras são features
-X = data.iloc[:, :-1].values
-y = data.iloc[:, -1].values
-
-# Codificar labels se for categórico
-if isinstance(y[0], str):
-    le = LabelEncoder()
-    y = le.fit_transform(y)
-    class_names = le.classes_
-else:
-    class_names = np.unique(y)
-
-# Binarizar as labels para plotar a curva ROC
-y_bin = label_binarize(y, classes=np.unique(y))
-n_classes = y_bin.shape[1]
-
-# Dividir em treino e teste
-X_train, X_test, y_train, y_test, y_train_bin, y_test_bin = train_test_split(
-    X, y, y_bin, test_size=0.3, random_state=42
+from sklearn.metrics import (
+    accuracy_score, confusion_matrix,
+    classification_report, roc_curve,
+    roc_auc_score
 )
 
+# Carrega o dataset
+df = pd.read_csv("alzheimers_disease_data.csv")
 
-# Função para plotar curva ROC multiclasse
-def plot_multiclass_roc(y_test_bin, y_score, n_classes, class_names, title):
-    fpr = dict()
-    tpr = dict()
-    roc_auc = dict()
+# Remove colunas não numéricas
+df = df.drop(columns=["PatientID", "DoctorInCharge"])
 
-    for i in range(n_classes):
-        fpr[i], tpr[i], _ = roc_curve(y_test_bin[:, i], y_score[:, i])
-        roc_auc[i] = auc(fpr[i], tpr[i])
+# Define as labels e o alvo
+X = df.drop("Diagnosis", axis=1)
+y = df["Diagnosis"]
 
-    colors = cycle(['blue', 'red', 'green', 'orange', 'purple'][:n_classes])
-    plt.figure(figsize=(8, 6))
+# Normaliza os dados
+scaler = StandardScaler()
+X = scaler.fit_transform(X)
 
-    for i, color in zip(range(n_classes), colors):
-        plt.plot(fpr[i], tpr[i], color=color, lw=2,
-                 label='ROC curve of class {0} (area = {1:0.2f})'
-                       ''.format(class_names[i], roc_auc[i]))
+# Separa treino/teste
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
 
-    plt.plot([0, 1], [0, 1], 'k--', lw=2)
-    plt.xlim([0.0, 1.0])
-    plt.ylim([0.0, 1.05])
-    plt.xlabel('False Positive Rate')
-    plt.ylabel('True Positive Rate')
-    plt.title(title)
-    plt.legend(loc="lower right")
-    plt.show()
+# Cria pipelines para os três classificadores
+pipelines = {
+    "Naive Bayes": Pipeline([("clf", GaussianNB())]),
+    "MLP": Pipeline([("clf", MLPClassifier(random_state=42, max_iter=1000))]),
+    "Decision Tree": Pipeline([("clf", DecisionTreeClassifier(random_state=42))])
+}
 
-# 1. Pipeline para MLPClassifier
-mlp_pipeline = Pipeline([
-    ('scaler', StandardScaler()),
-    ('mlp', MLPClassifier(hidden_layer_sizes=(100,), max_iter=1000, random_state=42))
-])
+results = {}
 
-mlp_pipeline.fit(X_train, y_train)
-y_pred_mlp = mlp_pipeline.predict(X_test)
-y_score_mlp = mlp_pipeline.predict_proba(X_test)
+for name, pipeline in pipelines.items():
+    print(f"\nTreinando e avaliando: {name}")
+    # Treino
+    pipeline.fit(X_train, y_train)
+    # Predições
+    y_pred = pipeline.predict(X_test)
 
-print("\n=== MLPClassifier ===")
-print(f"Acurácia: {accuracy_score(y_test, y_pred_mlp):.4f}")
-print("\nMatriz de Confusão:")
-print(confusion_matrix(y_test, y_pred_mlp))
-print("\nRelatório de Classificação:")
-print(classification_report(y_test, y_pred_mlp, target_names=class_names))
+    y_proba = None
+    if hasattr(pipeline.named_steps["clf"], "predict_proba"):
+        y_proba = pipeline.predict_proba(X_test)[:, 1]
 
-plot_multiclass_roc(y_test_bin, y_score_mlp, n_classes, class_names, "ROC Curve - MLPClassifier")
+    acc = accuracy_score(y_test, y_pred)
+    cm = confusion_matrix(y_test, y_pred)
+    report = classification_report(y_test, y_pred, output_dict=True)
+    auc = roc_auc_score(y_test, y_proba) if y_proba is not None else None
 
-# 2. Pipeline para GaussianNB
-nb_pipeline = Pipeline([
-    ('scaler', StandardScaler()),
-    ('nb', GaussianNB())
-])
+    results[name] = {
+        "Accuracy": acc,
+        "Confusion Matrix": cm,
+        "Classification Report": report,
+        "AUC": auc
+    }
 
-nb_pipeline.fit(X_train, y_train)
-y_pred_nb = nb_pipeline.predict(X_test)
-y_score_nb = nb_pipeline.predict_proba(X_test)
+    # Exibir métricas
+    print(f"Accuracy: {acc:.4f}")
+    print("Matriz de Confusão:")
+    print(cm)
+    print("Relatório de Classificação:")
+    print(classification_report(y_test, y_pred))
+    if auc:
+        print(f"AUC: {auc:.4f}")
 
-print("\n=== GaussianNB ===")
-print(f"Acurácia: {accuracy_score(y_test, y_pred_nb):.4f}")
-print("\nMatriz de Confusão:")
-print(confusion_matrix(y_test, y_pred_nb))
-print("\nRelatório de Classificação:")
-print(classification_report(y_test, y_pred_nb, target_names=class_names))
+    # Plot ROC
+    if y_proba is not None:
+        fpr, tpr, _ = roc_curve(y_test, y_proba)
+        plt.plot(fpr, tpr, label=f"{name} (AUC = {auc:.2f})")
 
-plot_multiclass_roc(y_test_bin, y_score_nb, n_classes, class_names, "ROC Curve - GaussianNB")
-
-# 3. Pipeline para DecisionTreeClassifier
-dt_pipeline = Pipeline([
-    ('scaler', StandardScaler()),
-    ('dt', DecisionTreeClassifier(random_state=42))
-])
-
-dt_pipeline.fit(X_train, y_train)
-y_pred_dt = dt_pipeline.predict(X_test)
-y_score_dt = dt_pipeline.predict_proba(X_test)
-
-print("\n=== DecisionTreeClassifier ===")
-print(f"Acurácia: {accuracy_score(y_test, y_pred_dt):.4f}")
-print("\nMatriz de Confusão:")
-print(confusion_matrix(y_test, y_pred_dt))
-print("\nRelatório de Classificação:")
-print(classification_report(y_test, y_pred_dt, target_names=class_names))
-
-plot_multiclass_roc(y_test_bin, y_score_dt, n_classes, class_names, "ROC Curve - DecisionTreeClassifier")
+# Curva ROC geral
+plt.plot([0, 1], [0, 1], "k--")
+plt.xlabel("FPR (False Positive Rate)")
+plt.ylabel("TPR (True Positive Rate)")
+plt.title("Curvas ROC")
+plt.legend()
+plt.grid()
+plt.tight_layout()
+plt.savefig("curva_roc_modelos.png", dpi=300)
+plt.close()
 
 
+# 8. Comparação Final
+summary = pd.DataFrame({
+    name: {
+        "Accuracy": r["Accuracy"],
+        "Precision": r["Classification Report"]["weighted avg"]["precision"],
+        "Recall": r["Classification Report"]["weighted avg"]["recall"],
+        "F1-score": r["Classification Report"]["weighted avg"]["f1-score"],
+        "AUC": r["AUC"]
+    } for name, r in results.items()
+}).T
+
+print("\nResumo dos Resultados Comparativos:")
+print(summary.round(4))
